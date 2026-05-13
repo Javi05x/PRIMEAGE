@@ -1,12 +1,12 @@
 import os
+import re
 from enum import Enum
 from typing import Optional
 
 from fastapi import FastAPI, Query
 from pymongo import MongoClient
 
-
-app = FastAPI(title="ProyectoFutbol API", version="0.4.0")
+app = FastAPI(title="ProyectoFutbol API", version="0.5.0")
 
 MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")
 DB_NAME = os.getenv("MONGO_DB", "ProyectoFutbol")
@@ -63,7 +63,12 @@ def options_rango_edad():
     return {"rango_edad": vals}
 
 
-def _build_match(temporada: Optional[str], comp: Optional[str], pos: Optional[PosEnum], min_minutes: int):
+def _build_match(
+    temporada: Optional[str],
+    comp: Optional[str],
+    pos: Optional[PosEnum],
+    min_minutes: int,
+):
     match = {"stats_base.min": {"$gte": min_minutes}}
     if temporada:
         match["team_info.temporada"] = temporada
@@ -113,6 +118,17 @@ def list_players(
     return {"items": list(cursor), "skip": skip, "limit": limit}
 
 
+@app.get("/players/count")
+def players_count(
+    temporada: Optional[str] = Query(default=None),
+    comp: Optional[str] = Query(default=None),
+    pos: Optional[PosEnum] = Query(default=None),
+    min: int = Query(default=900, ge=0),
+):
+    match = _build_match(temporada, comp, pos, min)
+    return {"count": jugadores.count_documents(match), "match": match}
+
+
 def _ranking(field: str, temporada: Optional[str], comp: Optional[str], min_minutes: int, limit: int):
     match = _build_match(temporada, comp, None, min_minutes)
     match[field] = {"$exists": True}
@@ -141,85 +157,6 @@ def _ranking(field: str, temporada: Optional[str], comp: Optional[str], min_minu
     ]
     return list(jugadores.aggregate(pipeline))
 
-@app.get("/players/search")
-def search_players(
-    temporada: Optional[str] = Query(default=None),
-    comp: Optional[str] = Query(default=None),
-    pos: Optional[PosEnum] = Query(default=None),
-    min: int = Query(default=0, ge=0),
-    q: str = Query(..., min_length=1, description="Texto a buscar en el nombre del jugador"),
-    limit: int = Query(default=15, ge=1, le=50),
-):
-    """
-    Devuelve sugerencias de jugadores que coinciden con 'q' (case-insensitive),
-    aplicando filtros de temporada/competición/posición/minutos.
-    """
-    match = _build_match(temporada, comp, pos, min)
-
-    # Regex case-insensitive, escapando el input del usuario
-    match["player"] = {"$regex": q, "$options": "i"}
-
-    cursor = (
-        jugadores.find(
-            match,
-            {
-                "_id": 0,
-                "player": 1,
-                "pos": 1,
-                "rango_edad": 1,
-                "nation": 1,
-                "team_info": 1,
-                "stats_base.min": 1,
-                "stats_ataque.gls": 1,
-                "stats_ataque.ast": 1,
-                "stats_ataque.g_a": 1,
-                "stats_avanzadas.xg": 1,
-                "stats_avanzadas.xag": 1,
-            },
-        )
-        .sort("stats_ataque.gls", -1)  # sugerencias más “relevantes” primero
-        .limit(limit)
-    )
-
-    return {"items": list(cursor), "limit": limit, "q": q}
-
-@app.get("/players/profile")
-def player_profile(
-    temporada: str = Query(...),
-    comp: str = Query(...),
-    player: str = Query(..., description="Nombre exacto del jugador (tal y como viene en la BD)"),
-):
-    """
-    Devuelve la ficha completa de un jugador en una temporada/competición.
-    (Si hay duplicados por algún motivo, devuelve una lista.)
-    """
-    match = {
-        "team_info.temporada": temporada,
-        "team_info.comp": comp,
-        "player": player,
-    }
-
-    cursor = jugadores.find(
-        match,
-        {
-            "_id": 0,
-            "player": 1,
-            "nation": 1,
-            "pos": 1,
-            "age": 1,
-            "born": 1,
-            "rango_edad": 1,
-            "team_info": 1,
-            "stats_base": 1,
-            "stats_ataque": 1,
-            "stats_disciplina": 1,
-            "stats_avanzadas": 1,
-            "stats_por_90": 1,
-        },
-    )
-
-    items = list(cursor)
-    return {"items": items, "count": len(items)}
 
 @app.get("/rankings/goles")
 def ranking_goles(
@@ -261,15 +198,86 @@ def ranking_xg(
     return {"field": "stats_avanzadas.xg", "items": _ranking("stats_avanzadas.xg", temporada, comp, min, limit)}
 
 
-@app.get("/players/count")
-def players_count(
+@app.get("/players/search")
+def search_players(
     temporada: Optional[str] = Query(default=None),
     comp: Optional[str] = Query(default=None),
     pos: Optional[PosEnum] = Query(default=None),
-    min: int = Query(default=900, ge=0),
+    min: int = Query(default=0, ge=0),
+    q: str = Query(..., min_length=1, description="Texto a buscar en el nombre del jugador"),
+    limit: int = Query(default=15, ge=1, le=50),
 ):
+    """
+    Devuelve sugerencias de jugadores que coinciden con 'q' (case-insensitive),
+    aplicando filtros de temporada/competición/posición/minutos.
+    """
     match = _build_match(temporada, comp, pos, min)
-    return {"count": jugadores.count_documents(match), "match": match}
+
+    # Regex case-insensitive, escapando input del usuario para evitar patrones raros
+    match["player"] = {"$regex": re.escape(q), "$options": "i"}
+
+    cursor = (
+        jugadores.find(
+            match,
+            {
+                "_id": 0,
+                "player": 1,
+                "pos": 1,
+                "rango_edad": 1,
+                "nation": 1,
+                "team_info": 1,
+                "stats_base.min": 1,
+                "stats_ataque.gls": 1,
+                "stats_ataque.ast": 1,
+                "stats_ataque.g_a": 1,
+                "stats_avanzadas.xg": 1,
+                "stats_avanzadas.xag": 1,
+            },
+        )
+        .sort("stats_ataque.gls", -1)
+        .limit(limit)
+    )
+
+    return {"items": list(cursor), "limit": limit, "q": q}
+
+
+@app.get("/players/profile")
+def player_profile(
+    temporada: str = Query(...),
+    comp: str = Query(...),
+    player: str = Query(..., description="Nombre exacto del jugador (tal y como viene en la BD)"),
+):
+    """
+    Devuelve la ficha completa de un jugador en una temporada/competición.
+    (Si hay duplicados por algún motivo, devuelve una lista.)
+    """
+    match = {
+        "team_info.temporada": temporada,
+        "team_info.comp": comp,
+        "player": player,
+    }
+
+    cursor = jugadores.find(
+        match,
+        {
+            "_id": 0,
+            "player": 1,
+            "nation": 1,
+            "pos": 1,
+            "age": 1,
+            "born": 1,
+            "rango_edad": 1,
+            "team_info": 1,
+            "stats_base": 1,
+            "stats_ataque": 1,
+            "stats_disciplina": 1,
+            "stats_avanzadas": 1,
+            "stats_por_90": 1,
+        },
+    )
+
+    items = list(cursor)
+    return {"items": items, "count": len(items)}
 
 
 @app.get("/analytics/age_ranges")
@@ -293,6 +301,7 @@ def analytics_age_ranges(
         {"$project": {"_id": 0, "rango_edad": "$_id", "count": 1}},
     ]
     return {"items": list(jugadores.aggregate(pipeline))}
+
 
 @app.get("/analytics/age_ranges_compare")
 def analytics_age_ranges_compare(
@@ -318,22 +327,12 @@ def analytics_age_ranges_compare(
         },
         {
             "$group": {
-                "_id": {
-                    "comp": "$team_info.comp",
-                    "rango_edad": "$rango_edad",
-                },
+                "_id": {"comp": "$team_info.comp", "rango_edad": "$rango_edad"},
                 "count": {"$sum": 1},
             }
         },
         {"$sort": {"_id.comp": 1, "_id.rango_edad": 1}},
-        {
-            "$project": {
-                "_id": 0,
-                "comp": "$_id.comp",
-                "rango_edad": "$_id.rango_edad",
-                "count": 1,
-            }
-        },
+        {"$project": {"_id": 0, "comp": "$_id.comp", "rango_edad": "$_id.rango_edad", "count": 1}},
     ]
 
     return {"items": list(jugadores.aggregate(pipeline))}
