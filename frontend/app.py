@@ -1,5 +1,7 @@
 import os
 import math
+from typing import Any, Dict, List
+
 import requests
 import pandas as pd
 import streamlit as st
@@ -10,29 +12,71 @@ API_BASE = os.getenv("API_BASE", "http://localhost:8000")
 st.set_page_config(page_title="ProyectoFutbol", layout="wide")
 st.title("ProyectoFutbol — Buscador y análisis")
 
-@st.cache_data(ttl=30)  # durante desarrollo mejor menos cache
-def get_json(path: str, params=None):
+
+@st.cache_data(ttl=30)
+def get_json(path: str, params=None) -> Dict[str, Any]:
     r = requests.get(f"{API_BASE}{path}", params=params, timeout=20)
     r.raise_for_status()
     return r.json()
 
+
 def fix_rank_df(df: pd.DataFrame) -> pd.DataFrame:
-    """Asegura que Valor es numérico y ordena de mayor a menor."""
+    """Asegura que Valor es numérico, ordena y añade Rank."""
     if df.empty:
         return df
-    df = df.copy()
-    df["Valor"] = pd.to_numeric(df["Valor"], errors="coerce").fillna(0)
-    df = df.sort_values("Valor", ascending=False).reset_index(drop=True)
-    df["Rank"] = range(1, len(df) + 1)
-    return df
+    out = df.copy()
+    out["Valor"] = pd.to_numeric(out["Valor"], errors="coerce").fillna(0.0)
+    # orden estable: valor desc y nombre asc
+    out = out.sort_values(["Valor", "Jugador"], ascending=[False, True]).reset_index(drop=True)
+    out["Rank"] = range(1, len(out) + 1)
+    return out
+
+
+def render_rank_bar(title: str, endpoint: str, params_base: Dict[str, Any], limit: int = 10) -> None:
+    """Renderiza un barplot de ranking (Top N) de forma robusta."""
+    res = get_json(endpoint, params={**params_base, "limit": int(limit)})
+    items = res.get("items", []) or []
+
+    df = pd.DataFrame([{
+        "Jugador": it.get("player"),
+        "Valor": it.get("value", 0),
+        "Pos": it.get("pos"),
+        "Equipo": (it.get("team_info") or {}).get("squad"),
+    } for it in items])
+
+    df = fix_rank_df(df)
+
+    if df.empty:
+        st.info(f"Sin datos para: {title}")
+        return
+
+    fig = px.bar(
+        df,
+        x="Jugador",
+        y="Valor",
+        color="Pos",
+        hover_data=["Rank", "Equipo"],
+        title=title,
+    )
+    fig.update_layout(xaxis={"categoryorder": "total descending", "tickangle": -45})
+    st.plotly_chart(fig, use_container_width=True)
+
 
 # ========= Sidebar filtros =========
 st.sidebar.header("Filtros")
 
-temporadas = get_json("/options/temporadas")["temporada"]
+temporadas = (get_json("/options/temporadas").get("temporada") or [])
+if not temporadas:
+    st.error("No hay temporadas disponibles desde la API (/options/temporadas).")
+    st.stop()
+
 temporada = st.sidebar.selectbox("Temporada", temporadas, index=0)
 
-comps = get_json("/options/comp", params={"temporada": temporada})["comp"]
+comps = (get_json("/options/comp", params={"temporada": temporada}).get("comp") or [])
+if not comps:
+    st.error("No hay competiciones disponibles para esta temporada (/options/comp).")
+    st.stop()
+
 comp = st.sidebar.selectbox("Competición", comps, index=0)
 
 pos = st.sidebar.selectbox("Posición", ["(Todas)", "GK", "DF", "MF", "FW"], index=0)
@@ -42,11 +86,12 @@ limit = st.sidebar.slider("Resultados por página", 10, 100, 25, 5)
 page = st.sidebar.number_input("Página", min_value=1, value=1, step=1)
 skip = (page - 1) * limit
 
-params_base = {"temporada": temporada, "comp": comp, "min": int(min_minutes)}
+params_base: Dict[str, Any] = {"temporada": temporada, "comp": comp, "min": int(min_minutes)}
 if pos != "(Todas)":
     params_base["pos"] = pos
 
 tab1, tab2, tab3, tab4, tab5 = st.tabs(["Jugadores", "Rankings", "Gráficos", "Top comunes", "Jugador"])
+
 
 # ========= TAB 1: Jugadores =========
 with tab1:
@@ -56,14 +101,15 @@ with tab1:
     try:
         cnt = get_json("/players/count", params=params_base)
         total = cnt.get("count")
-        st.caption(f"Coincidencias: {total}")
+        if total is not None:
+            st.caption(f"Coincidencias: {total}")
     except Exception:
         st.caption("Coincidencias: (endpoint /players/count no disponible)")
 
     data = get_json("/players", params={**params_base, "limit": int(limit), "skip": int(skip)})
-    items = data.get("items", [])
+    items = data.get("items", []) or []
 
-    rows = []
+    rows: List[Dict[str, Any]] = []
     for it in items:
         rows.append({
             "Jugador": it.get("player"),
@@ -90,6 +136,7 @@ with tab1:
         pages = max(1, math.ceil(total / limit))
         st.caption(f"Página {page} de {pages} (skip={skip}, limit={limit})")
 
+
 # ========= TAB 2: Rankings =========
 with tab2:
     st.subheader("Rankings (Top 10)")
@@ -97,70 +144,13 @@ with tab2:
     col1, col2 = st.columns(2)
 
     with col1:
-        goles = get_json("/rankings/goles", params={**params_base, "limit": 10})
-        df_g = pd.DataFrame([{
-            "Jugador": it.get("player"),
-            "Valor": it.get("value", 0),
-            "Pos": it.get("pos"),
-            "Equipo": (it.get("team_info") or {}).get("squad"),
-        } for it in goles.get("items", [])])
-        df_g = fix_rank_df(df_g)
-
-        if not df_g.empty:
-            fig = px.bar(df_g, x="Jugador", y="Valor", color="Pos", hover_data=["Rank", "Equipo"], title="Top Goles")
-            fig.update_layout(xaxis={"categoryorder": "total descending", "tickangle": -45})
-            st.plotly_chart(fig, use_container_width=True)
-        else:
-            st.info("Sin datos de goles.")
-
-        xg = get_json("/rankings/xg", params={**params_base, "limit": 10})
-        df_xg = pd.DataFrame([{
-            "Jugador": it.get("player"),
-            "Valor": it.get("value", 0),
-            "Pos": it.get("pos"),
-            "Equipo": (it.get("team_info") or {}).get("squad"),
-        } for it in xg.get("items", [])])
-        df_xg = fix_rank_df(df_xg)
-
-        if not df_xg.empty:
-            fig = px.bar(df_xg, x="Jugador", y="Valor", color="Pos", hover_data=["Rank", "Equipo"], title="Top xG")
-            fig.update_layout(xaxis={"categoryorder": "total descending", "tickangle": -45})
-            st.plotly_chart(fig, use_container_width=True)
-        else:
-            st.info("Sin datos de xG.")
+        render_rank_bar("Top Goles", "/rankings/goles", params_base, limit=10)
+        render_rank_bar("Top xG", "/rankings/xg", params_base, limit=10)
 
     with col2:
-        ast = get_json("/rankings/asistencias", params={**params_base, "limit": 10})
-        df_a = pd.DataFrame([{
-            "Jugador": it.get("player"),
-            "Valor": it.get("value", 0),
-            "Pos": it.get("pos"),
-            "Equipo": (it.get("team_info") or {}).get("squad"),
-        } for it in ast.get("items", [])])
-        df_a = fix_rank_df(df_a)
+        render_rank_bar("Top Asistencias", "/rankings/asistencias", params_base, limit=10)
+        render_rank_bar("Top Goles + Asistencias", "/rankings/goles-asistencias", params_base, limit=10)
 
-        if not df_a.empty:
-            fig = px.bar(df_a, x="Jugador", y="Valor", color="Pos", hover_data=["Rank", "Equipo"], title="Top Asistencias")
-            fig.update_layout(xaxis={"categoryorder": "total descending", "tickangle": -45})
-            st.plotly_chart(fig, use_container_width=True)
-        else:
-            st.info("Sin datos de asistencias.")
-
-        ga = get_json("/rankings/goles-asistencias", params={**params_base, "limit": 10})
-        df_ga = pd.DataFrame([{
-            "Jugador": it.get("player"),
-            "Valor": it.get("value", 0),
-            "Pos": it.get("pos"),
-            "Equipo": (it.get("team_info") or {}).get("squad"),
-        } for it in ga.get("items", [])])
-        df_ga = fix_rank_df(df_ga)
-
-        if not df_ga.empty:
-            fig = px.bar(df_ga, x="Jugador", y="Valor", color="Pos", hover_data=["Rank", "Equipo"], title="Top Goles + Asistencias")
-            fig.update_layout(xaxis={"categoryorder": "total descending", "tickangle": -45})
-            st.plotly_chart(fig, use_container_width=True)
-        else:
-            st.info("Sin datos de G+A.")
 
 # ========= TAB 3: Gráficos =========
 with tab3:
@@ -175,33 +165,11 @@ with tab3:
             ("xG", "/rankings/xg"),
         ],
         format_func=lambda x: x[0],
-        key="metric_top10"
+        key="metric_top10",
     )
 
     # ---- Top 10 barras (desde rankings) ----
-    endpoint = metric[1]
-    rank = get_json(endpoint, params={**params_base, "limit": 10})
-    df_rank = pd.DataFrame([{
-        "Jugador": it.get("player"),
-        "Valor": it.get("value", 0),
-        "Pos": it.get("pos"),
-        "Equipo": (it.get("team_info") or {}).get("squad"),
-    } for it in rank.get("items", [])])
-    df_rank = fix_rank_df(df_rank)
-
-    if df_rank.empty:
-        st.warning("Sin datos para el ranking con estos filtros.")
-    else:
-        fig = px.bar(
-            df_rank,
-            x="Jugador",
-            y="Valor",
-            color="Pos",
-            hover_data=["Rank", "Equipo"],
-            title=f"Top {len(df_rank)} — {metric[0]}",
-        )
-        fig.update_layout(xaxis={"categoryorder": "total descending", "tickangle": -45})
-        st.plotly_chart(fig, use_container_width=True)
+    render_rank_bar(f"Top 10 — {metric[0]}", metric[1], params_base, limit=10)
 
     st.divider()
 
@@ -211,12 +179,12 @@ with tab3:
         0, 3000,
         min(int(min_minutes), 900),
         50,
-        key="min_graph"
+        key="min_graph",
     )
 
     # Traemos una muestra de jugadores para scatter/pos (rápido)
     data2 = get_json("/players", params={**params_base, "min": int(min_graph), "limit": 200, "skip": 0})
-    items2 = data2.get("items", [])
+    items2 = data2.get("items", []) or []
 
     df2 = pd.DataFrame([{
         "Jugador": it.get("player"),
@@ -242,58 +210,57 @@ with tab3:
 
         with colB:
             st.markdown("### Distribución por rangos de edad (TOTAL)")
-
             age = get_json("/analytics/age_ranges", params={**params_base, "min": int(min_graph)})
-            df_age = pd.DataFrame(age.get("items", []))
+            df_age = pd.DataFrame(age.get("items", []) or [])
 
             if df_age.empty:
                 st.info("Sin datos de rangos de edad con estos filtros.")
             else:
-                fig = px.bar(
-                    df_age,
-                    x="rango_edad",
-                    y="count",
-                    title="Jugadores por rango de edad",
-                )
+                fig = px.bar(df_age, x="rango_edad", y="count", title="Jugadores por rango de edad")
                 fig.update_layout(xaxis_tickangle=-45)
                 st.plotly_chart(fig, use_container_width=True)
 
     st.markdown("### Goles vs xG (scatter)")
 
-    # En 21/22 (tu dataset actual) no hay xG real -> queda todo 0 y el scatter sale “mal”
-    xg = pd.to_numeric(df2["xG"], errors="coerce").fillna(0)
-
-    if xg.max() == 0:
-        st.info("En esta temporada/dataset no hay xG (todos los valores son 0). Mostrando Goles vs Minutos.")
-        fig = px.scatter(
-        df2,
-        x="Min",
-        y="Goles",
-        color="Pos",
-        hover_name="Jugador",
-        hover_data=["Equipo", "Rango edad"],
-        title="Goles vs Minutos",
-    )
+    if df2.empty:
+        st.info("No hay datos para el scatter con estos filtros.")
     else:
-        fig = px.scatter(
-        df2,
-        x="xG",
-        y="Goles",
-        color="Pos",
-        hover_name="Jugador",
-        hover_data=["Equipo", "Min", "Rango edad"],
-        title="Goles vs xG",
-    )
+        df2 = df2.copy()
+        df2["xG"] = pd.to_numeric(df2["xG"], errors="coerce").fillna(0.0)
+        df2["Goles"] = pd.to_numeric(df2["Goles"], errors="coerce").fillna(0.0)
+        df2["Min"] = pd.to_numeric(df2["Min"], errors="coerce").fillna(0.0)
 
-    fig.update_xaxes(rangemode="tozero")
-    fig.update_yaxes(rangemode="tozero")
-    st.plotly_chart(fig, use_container_width=True)
+        if df2["xG"].max() == 0:
+            st.info("En esta temporada/dataset no hay xG (todos los valores son 0). Mostrando Goles vs Minutos.")
+            fig = px.scatter(
+                df2,
+                x="Min",
+                y="Goles",
+                color="Pos",
+                hover_name="Jugador",
+                hover_data=["Equipo", "Rango edad"],
+                title="Goles vs Minutos",
+            )
+        else:
+            fig = px.scatter(
+                df2,
+                x="xG",
+                y="Goles",
+                color="Pos",
+                hover_name="Jugador",
+                hover_data=["Equipo", "Min", "Rango edad"],
+                title="Goles vs xG",
+            )
+
+        fig.update_xaxes(rangemode="tozero")
+        fig.update_yaxes(rangemode="tozero")
+        st.plotly_chart(fig, use_container_width=True)
 
     # ======= Comparación 2 ligas (por rangos de edad) =======
     st.divider()
     st.subheader("Comparar 2 competiciones por rangos de edad")
 
-    comp_list = comps  # lista de competiciones de la temporada seleccionada
+    comp_list = comps
 
     c1, c2 = st.columns(2)
     with c1:
@@ -305,7 +272,6 @@ with tab3:
     if compA == compB:
         st.warning("Elige dos competiciones distintas para comparar.")
     else:
-        # OJO: este endpoint tienes que haberlo añadido en la API: /analytics/age_ranges_compare
         cmp_data = get_json(
             "/analytics/age_ranges_compare",
             params={
@@ -316,7 +282,7 @@ with tab3:
                 **({"pos": pos} if pos != "(Todas)" else {}),
             },
         )
-        df_cmp = pd.DataFrame(cmp_data.get("items", []))
+        df_cmp = pd.DataFrame(cmp_data.get("items", []) or [])
 
         if df_cmp.empty:
             st.info("Sin datos para comparar con esos filtros.")
@@ -332,6 +298,8 @@ with tab3:
             fig.update_layout(xaxis_tickangle=-45)
             st.plotly_chart(fig, use_container_width=True)
 
+
+# ========= TAB 4: Top comunes =========
 with tab4:
     st.subheader("Top comunes: goleadores vs asistentes")
 
@@ -341,7 +309,6 @@ with tab4:
     with coly:
         top_n_a = st.slider("Top N asistentes", 5, 50, 20, 5, key="top_n_a")
 
-    # Traemos los tops desde la API con los mismos filtros (temporada/comp/min/pos)
     top_g = get_json("/rankings/goles", params={**params_base, "limit": int(top_n_g)})
     top_a = get_json("/rankings/asistencias", params={**params_base, "limit": int(top_n_a)})
 
@@ -351,7 +318,7 @@ with tab4:
         "Pos": it.get("pos"),
         "Min": (it.get("stats_base") or {}).get("min"),
         "Goles": it.get("value", 0),
-    } for it in top_g.get("items", [])])
+    } for it in (top_g.get("items", []) or [])])
 
     df_a = pd.DataFrame([{
         "Jugador": it.get("player"),
@@ -359,34 +326,25 @@ with tab4:
         "Pos": it.get("pos"),
         "Min": (it.get("stats_base") or {}).get("min"),
         "Asistencias": it.get("value", 0),
-    } for it in top_a.get("items", [])])
+    } for it in (top_a.get("items", []) or [])])
 
-    # Normalizamos tipos por si acaso
     if not df_g.empty:
-        df_g["Goles"] = pd.to_numeric(df_g["Goles"], errors="coerce").fillna(0)
-        df_g["Min"] = pd.to_numeric(df_g["Min"], errors="coerce").fillna(0)
+        df_g["Goles"] = pd.to_numeric(df_g["Goles"], errors="coerce").fillna(0.0)
+        df_g["Min"] = pd.to_numeric(df_g["Min"], errors="coerce").fillna(0.0)
     if not df_a.empty:
-        df_a["Asistencias"] = pd.to_numeric(df_a["Asistencias"], errors="coerce").fillna(0)
-        df_a["Min"] = pd.to_numeric(df_a["Min"], errors="coerce").fillna(0)
+        df_a["Asistencias"] = pd.to_numeric(df_a["Asistencias"], errors="coerce").fillna(0.0)
+        df_a["Min"] = pd.to_numeric(df_a["Min"], errors="coerce").fillna(0.0)
 
     c1, c2 = st.columns(2)
     with c1:
         st.markdown("### Top Goleadores")
-        if df_g.empty:
-            st.info("Sin datos de goles con estos filtros.")
-        else:
-            st.dataframe(df_g, use_container_width=True, hide_index=True)
-
+        st.dataframe(df_g, use_container_width=True, hide_index=True) if not df_g.empty else st.info("Sin datos.")
     with c2:
         st.markdown("### Top Asistentes")
-        if df_a.empty:
-            st.info("Sin datos de asistencias con estos filtros.")
-        else:
-            st.dataframe(df_a, use_container_width=True, hide_index=True)
+        st.dataframe(df_a, use_container_width=True, hide_index=True) if not df_a.empty else st.info("Sin datos.")
 
     st.divider()
 
-    # Intersección: jugadores que aparecen en ambos tops
     if df_g.empty or df_a.empty:
         st.info("No hay suficientes datos para calcular comunes.")
     else:
@@ -398,24 +356,23 @@ with tab4:
         if df_common.empty:
             st.info("No hay jugadores que aparezcan en ambos tops con estos filtros.")
         else:
-            # Orden: primero por goles y luego por asistencias
             df_common = df_common.sort_values(["Goles", "Asistencias"], ascending=False).reset_index(drop=True)
             st.dataframe(df_common, use_container_width=True, hide_index=True)
 
             st.markdown("### Comparación visual (solo tops)")
-            # Preparamos dataset para scatter combinando ambos tops (outer)
+
             df_scatter = df_g[["Jugador", "Equipo", "Pos", "Min", "Goles"]].merge(
                 df_a[["Jugador", "Asistencias"]],
                 on="Jugador",
-                how="outer"
+                how="outer",
             )
-            df_scatter["Goles"] = pd.to_numeric(df_scatter["Goles"], errors="coerce").fillna(0)
-            df_scatter["Asistencias"] = pd.to_numeric(df_scatter["Asistencias"], errors="coerce").fillna(0)
+            df_scatter["Goles"] = pd.to_numeric(df_scatter["Goles"], errors="coerce").fillna(0.0)
+            df_scatter["Asistencias"] = pd.to_numeric(df_scatter["Asistencias"], errors="coerce").fillna(0.0)
 
-            # Etiqueta por grupo
             set_g = set(df_g["Jugador"].tolist())
             set_a = set(df_a["Jugador"].tolist())
-            def grupo(j):
+
+            def grupo(j: str) -> str:
                 in_g = j in set_g
                 in_a = j in set_a
                 if in_g and in_a:
@@ -437,12 +394,12 @@ with tab4:
             )
             fig.update_yaxes(rangemode="tozero")
             fig.update_xaxes(rangemode="tozero")
-            st.plotly_chart(fig, use_container_width=True)    
+            st.plotly_chart(fig, use_container_width=True)
 
-# ========= TAB 5: Jugador (búsqueda + ficha) =========
+
+# ========= TAB 5: Jugador =========
 with tab5:
     st.subheader("Jugador — búsqueda y ficha")
-
     st.caption("Busca un jugador dentro de la temporada y competición seleccionadas en el panel lateral.")
 
     q = st.text_input(
@@ -451,8 +408,7 @@ with tab5:
         key="player_q",
     ).strip()
 
-    # (opcional) botón para limpiar búsqueda
-    cclr1, cclr2 = st.columns([1, 5])
+    cclr1, _ = st.columns([1, 5])
     with cclr1:
         if st.button("Limpiar", use_container_width=True):
             st.session_state["player_q"] = ""
@@ -461,13 +417,12 @@ with tab5:
     if len(q) < 2:
         st.info("Escribe al menos 2 letras para ver sugerencias.")
     else:
-        # Sugerencias (filtradas por temporada/comp/pos/minutos)
         sug = get_json(
             "/players/search",
             params={**params_base, "min": int(min_minutes), "q": q, "limit": 20},
         )
 
-        items = sug.get("items", [])
+        items = sug.get("items", []) or []
         if not items:
             st.warning("No hay coincidencias con esos filtros.")
         else:
@@ -481,12 +436,10 @@ with tab5:
                 "xG": (it.get("stats_avanzadas") or {}).get("xg", 0.0),
             } for it in items])
 
-            # Normalizamos tipos por si acaso
             for c in ["Min", "Goles", "Asist"]:
                 df_sug[c] = pd.to_numeric(df_sug[c], errors="coerce").fillna(0).astype(int)
             df_sug["xG"] = pd.to_numeric(df_sug["xG"], errors="coerce").fillna(0.0)
 
-            # Etiqueta bonita
             df_sug["label"] = (
                 df_sug["Jugador"].fillna("") + " — " +
                 df_sug["Equipo"].fillna("") + " (" +
@@ -494,28 +447,22 @@ with tab5:
             )
 
             st.markdown("### Selecciona jugador")
-            label_sel = st.selectbox(
-                "Resultados",
-                df_sug["label"].tolist(),
-                key="player_label_sel",
-            )
+            label_sel = st.selectbox("Resultados", df_sug["label"].tolist(), key="player_label_sel")
 
             row_sel = df_sug.loc[df_sug["label"] == label_sel].iloc[0]
             jugador_sel = row_sel["Jugador"]
 
-            # Perfil completo (exact match)
             prof = get_json(
                 "/players/profile",
                 params={"temporada": temporada, "comp": comp, "player": jugador_sel},
             )
 
-            prof_items = prof.get("items", [])
+            prof_items = prof.get("items", []) or []
             if not prof_items:
-                st.warning("No se encontró el perfil completo del jugador (raro).")
+                st.warning("No se encontró el perfil completo del jugador.")
             else:
                 it = prof_items[0]
 
-                # Cabecera
                 equipo = (it.get("team_info") or {}).get("squad", "")
                 pos_it = it.get("pos", "")
                 edad = it.get("age", "")
@@ -524,7 +471,6 @@ with tab5:
                 st.markdown(f"## {jugador_sel}")
                 st.caption(f"{equipo} · {comp} · {temporada} · {pos_it} · {nac} · Edad: {edad}")
 
-                # Métricas principales
                 base = it.get("stats_base") or {}
                 atk = it.get("stats_ataque") or {}
                 adv = it.get("stats_avanzadas") or {}
@@ -541,8 +487,6 @@ with tab5:
                 m2.metric("Goles", f"{gls_j}")
                 m3.metric("Asist", f"{ast_j}")
                 m4.metric("G+A", f"{ga_j}")
-
-                # xG/xAG: si no existe (21/22) suelen estar a 0 -> lo mostramos pero avisamos
                 m5.metric("xG", f"{xg_j:.2f}")
                 m6.metric("xAG", f"{xag_j:.2f}")
 
@@ -551,31 +495,24 @@ with tab5:
 
                 st.divider()
 
-                # Tablas por secciones (en 2 columnas)
-                def dict_to_df(d: dict):
+                def dict_to_df(d: dict) -> pd.DataFrame:
                     d = d or {}
                     return pd.DataFrame({"Campo": list(d.keys()), "Valor": list(d.values())})
 
                 colL, colR = st.columns(2)
-
                 with colL:
                     st.markdown("### Base")
                     st.dataframe(dict_to_df(it.get("stats_base")), use_container_width=True, hide_index=True)
-
                     st.markdown("### Ataque")
                     st.dataframe(dict_to_df(it.get("stats_ataque")), use_container_width=True, hide_index=True)
-
                 with colR:
                     st.markdown("### Avanzadas")
                     st.dataframe(dict_to_df(it.get("stats_avanzadas")), use_container_width=True, hide_index=True)
-
                     st.markdown("### Por 90")
                     st.dataframe(dict_to_df(it.get("stats_por_90")), use_container_width=True, hide_index=True)
-
                     st.markdown("### Disciplina")
                     st.dataframe(dict_to_df(it.get("stats_disciplina")), use_container_width=True, hide_index=True)
 
-                # (Opcional) mini gráfico comparativo para la ficha
                 st.divider()
                 st.markdown("### Mini comparación (ficha)")
                 df_mini = pd.DataFrame([{
