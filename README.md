@@ -1,124 +1,62 @@
-# PRIMEAGE
+# PRIMEAGE: Análisis Futbolístico por Rango de Edad
 
-## Descripción
+## Resumen
 
-**PRIMEAGE** es un proyecto de análisis del rendimiento de futbolistas profesionales en las 5 grandes ligas europeas (Premier League, LaLiga, Serie A, Bundesliga y Ligue 1), clasificándolos por rangos de edad:
+**PRIMEAGE** es una herramienta de análisis de datos diseñada para explorar y visualizar el rendimiento futbolístico en función del rango de edad de los jugadores profesionales. El proyecto permite analizar grandes volúmenes de datos y segmentar información relevante para descubrir tendencias, identificar picos de rendimiento y realizar comparativas por edad y temporada.
 
-- **18–27**: Jugadores jóvenes
-- **28–37**: Jugadores en plenitud
-- **38+**: Jugadores veteranos
+## Características principales
 
-El análisis abarca las temporadas **2023/24** y **2024/25**, usando datos estadísticos detallados de cada jugador.
+- **Análisis multitemporal y segmentado por edad** para las temporadas: 2021/22, 2022/23, 2023/24 y 2024/25.
+- **Datos obtenidos exclusivamente de archivos CSV descargados de Kaggle**.
+- **Almacenamiento y análisis en MongoDB**, facilitando consultas complejas y dinámicas.
+- **Visualización de resultados** mediante gráficos y tablas generados con Python.
+- **Scripts y notebooks reproducibles** para la carga, procesamiento y análisis de los datos.
 
-## Autores
+## Estructura del sistema
 
-- **Jaime Ercilla Martin**
-- **Javier Bolívar García-Izquierdo**
+1. **Obtención de datos**:  
+   Descarga de los ficheros CSV de Kaggle con información detallada sobre jugadores, partidos y equipos para las temporadas seleccionadas.
 
-## Fuentes de datos
+2. **Carga y almacenamiento en MongoDB**:  
+   Los archivos CSV se importan como colecciones en una base de datos MongoDB, donde se gestionan y relacionan los datos históricos y estadísticos de cada temporada.
 
-Los datos provienen de dos datasets de Kaggle en formato Excel:
+3. **Preprocesamiento y enriquecimiento**:  
+   Mediante scripts en Python, se realiza limpieza, estandarización de formatos, segmentación por rango de edad y cálculo de métricas agregadas (goles/minuto, asistencias, etc.).
 
-- [Top 5 Leagues — Temporada 23/24](https://www.kaggle.com/datasets/orkunaktas/all-football-players-stats-in-top-5-leagues-2324)
-- [Top 5 Leagues — Temporada 24/25](https://www.kaggle.com/datasets/orkunaktas/all-football-players-stats-in-top-5-leagues-2425)
+4. **Análisis y visualización**:  
+   Generación de informes, gráficos y consultas estadísticas desde la base de datos utilizando notebooks y scripts Python.
 
-## Estructura del proyecto
+## Tecnologías utilizadas
 
-```
-AGE-FIVE/
-├── .env.example           # Plantilla de variables de entorno
-├── .gitignore
-├── README.md
-├── docker-compose.yml     # Levanta MongoDB y Mongo Express con Docker
-├── requirements.txt       # Dependencias Python
-├── data/
-│   └── README.md          # Instrucciones para colocar los Excel de Kaggle
-└── bd_futbol/
-    ├── config.py          # Configuración centralizada (URI, colección, rangos, rutas)
-    └── descargar_dt.py    # Script principal de carga de datos a MongoDB
-```
+- **Python** (pandas, pymongo, matplotlib, seaborn, jupyter)
+- **MongoDB** como base de datos principal
+- **Docker** para despliegue y facilitar la réplica del entorno
+- **Git/GitHub** para versionado y desarrollo colaborativo
 
-## Requisitos previos
+## Cómo usar PRIMEAGE
 
-- **Docker** y **Docker Compose** (para levantar MongoDB)
-- **Python 3.10+**
+1. Descarga los archivos CSV relevantes desde Kaggle (consulta la carpeta `/data` o la documentación del proyecto).
+2. Levanta una instancia de MongoDB (puedes usar Docker con la configuración incluida).
+3. Ejecuta los scripts de carga para importar los CSV a la base de datos.
+4. Utiliza los notebooks de análisis para procesar, explorar y visualizar los datos.
+5. Personaliza las consultas y visualizaciones según los objetivos de tu análisis.
 
-## Instalación paso a paso
+## Resultados obtenidos
 
-### 1. Clonar el repositorio
+- Segmentación y análisis detallado por rango de edad y temporada.
+- Tendencias históricas en el uso y rendimiento de jugadores jóvenes y veteranos.
+- Informes y gráficos listos para presentaciones a clubes, técnicos o analistas.
 
-```bash
-git clone https://github.com/Javi05x/AGE-FIVE.git
-cd AGE-FIVE
-```
+## Trabajo futuro
 
-### 2. Crear y activar un entorno virtual
+- Integrar nuevas ligas, competiciones y fuentes de datos con estructura similar (nuevos CSV de Kaggle).
+- Implementar modelos de predicción para evolución de carrera o riesgo de lesión.
+- Desarrollar una interfaz web para facilitar el acceso a las visualizaciones y consultas.
 
-```bash
-python -m venv venv
-# En Linux/macOS:
-source venv/bin/activate
-# En Windows:
-venv\Scripts\activate
-```
+## Repositorio
 
-### 3. Instalar dependencias
+[https://github.com/Javi05x/PRIMEAGE](https://github.com/Javi05x/PRIMEAGE)
 
-```bash
-pip install -r requirements.txt
-```
+---
 
-### 4. Configurar las variables de entorno
-
-```bash
-cp .env.example .env
-# Edita .env si necesitas cambiar las rutas o la URI de MongoDB
-```
-
-### 5. Descargar los datasets de Kaggle
-
-Descarga los dos archivos Excel desde los enlaces indicados en la sección **Fuentes de datos** y colócalos en la carpeta `data/`:
-
-- `data/top5-players-2324.xlsx`
-- `data/top5-players-2425.xlsx`
-
-Consulta `data/README.md` para más detalles.
-
-### 6. Levantar MongoDB con Docker
-
-```bash
-docker-compose up -d
-```
-
-Esto arranca MongoDB en `localhost:27017` y Mongo Express en `http://localhost:8081`.
-
-### 7. Cargar los datos en MongoDB
-
-```bash
-python bd_futbol/descargar_dt.py
-```
-
-El script carga ambas temporadas en la colección `Jugadores` de la base de datos `ProyectoFutbol`. Si ya existen datos de una temporada, preguntará si deseas sobreescribirlos.
-
-## Fases del proyecto
-
-| Fase | Descripción |
-|------|-------------|
-| **Fase 1** | Base del proyecto: configuración, carga de datos y estructura MongoDB |
-| **Fase 2** | Análisis exploratorio de datos (EDA) con pandas y visualizaciones |
-| **Fase 3** | Modelos de predicción y clustering con scikit-learn |
-| **Fase 4** | Dashboard interactivo con Jupyter o similar |
-
-## Tecnologías usadas
-
-- **Python 3.10+** — lenguaje principal
-- **MongoDB 7** — base de datos NoSQL (vía Docker)
-- **Docker / Docker Compose** — gestión del entorno de base de datos
-- **pandas** — manipulación y limpieza de datos
-- **pymongo** — conexión y operaciones con MongoDB
-- **openpyxl** — lectura de archivos Excel
-- **python-dotenv** — gestión de variables de entorno
-- **matplotlib / seaborn** — visualización de datos
-- **numpy** — operaciones numéricas
-- **scikit-learn** — modelos de machine learning (fases futuras)
-- **Jupyter** — análisis interactivo (fases futuras)
+Si tienes sugerencias o quieres contribuir, por favor abre un issue o una pull request.
