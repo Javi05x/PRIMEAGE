@@ -225,11 +225,13 @@ with tab3:
     if df2.empty:
         st.info("No hay datos para el scatter con estos filtros.")
     else:
+        # Normalizamos tipos
         df2 = df2.copy()
         df2["xG"] = pd.to_numeric(df2["xG"], errors="coerce").fillna(0.0)
         df2["Goles"] = pd.to_numeric(df2["Goles"], errors="coerce").fillna(0.0)
         df2["Min"] = pd.to_numeric(df2["Min"], errors="coerce").fillna(0.0)
 
+        # En 21/22 (tu dataset actual) no hay xG real -> queda todo 0
         if df2["xG"].max() == 0:
             st.info("En esta temporada/dataset no hay xG (todos los valores son 0). Mostrando Goles vs Minutos.")
             fig = px.scatter(
@@ -338,11 +340,17 @@ with tab4:
     c1, c2 = st.columns(2)
     with c1:
         st.markdown("### Top Goleadores")
-        st.dataframe(df_g, use_container_width=True, hide_index=True) if not df_g.empty else st.info("Sin datos.")
+    if df_g.empty:
+        st.info("Sin datos.")
+    else:
+        st.dataframe(df_g, use_container_width=True, hide_index=True)
+
     with c2:
         st.markdown("### Top Asistentes")
-        st.dataframe(df_a, use_container_width=True, hide_index=True) if not df_a.empty else st.info("Sin datos.")
-
+    if df_a.empty:
+        st.info("Sin datos.")
+    else:
+        st.dataframe(df_a, use_container_width=True, hide_index=True)
     st.divider()
 
     if df_g.empty or df_a.empty:
